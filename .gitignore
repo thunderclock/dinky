@@ -65,3 +65,5 @@ extends/*
 .idea
 .idea/vcs.xml
 dinky-web/package-lock.json
+
+.vscode
