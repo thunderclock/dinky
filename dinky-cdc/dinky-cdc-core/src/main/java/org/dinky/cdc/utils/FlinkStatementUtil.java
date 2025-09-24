@@ -89,6 +89,14 @@ public class FlinkStatementUtil {
             sb.append(table.getColumns().get(i).getName());
             sb.append("` ");
             sb.append(convertSinkColumnType(type, config));
+            
+            // Add column comment if exists
+            if (table.getColumns().get(i).getComment() != null && !table.getColumns().get(i).getComment().trim().isEmpty()) {
+                sb.append(" COMMENT '");
+                sb.append(table.getColumns().get(i).getComment().replaceAll("[\"']", ""));
+                sb.append("'");
+            }
+            
             sb.append("\n");
             if (table.getColumns().get(i).isKeyFlag()) {
                 pks.add(table.getColumns().get(i).getName());
@@ -108,7 +116,16 @@ public class FlinkStatementUtil {
             sb.append("    ,");
             sb.append(pksb);
         }
-        sb.append(") WITH (\n");
+        sb.append(")");
+        
+        // Add table comment if exists
+        if (table.getComment() != null && !table.getComment().trim().isEmpty()) {
+            sb.append(" COMMENT '");
+            sb.append(table.getComment().replaceAll("[\"']", ""));
+            sb.append("'");
+        }
+        
+        sb.append(" WITH (\n");
         sb.append(getSinkConfigurationString(config, sinkSchemaName, sinkTableName, pkList));
         sb.append(")\n");
         return sb.toString();
