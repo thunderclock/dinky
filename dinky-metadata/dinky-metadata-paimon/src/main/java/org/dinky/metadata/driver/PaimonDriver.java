@@ -278,7 +278,55 @@ public class PaimonDriver extends AbstractDriver<PaimonConfig> {
 
     @Override
     public String getCreateTableSql(Table table) {
-        return null;
+        log.info("PaimonDriver.getCreateTableSql called for table: {}.{}", table.getSchema(), table.getName());
+        StringBuilder sb = new StringBuilder();
+        sb.append("CREATE TABLE IF NOT EXISTS `").append(table.getSchema()).append("`.`").append(table.getName()).append("` (\n");
+        
+        List<Column> columns = table.getColumns();
+        for (int i = 0; i < columns.size(); i++) {
+            Column column = columns.get(i);
+            sb.append("    `").append(column.getName()).append("` ");
+            sb.append(column.getType());
+            
+            if (!column.isNullable()) {
+                sb.append(" NOT NULL");
+            }
+            
+            if (column.getComment() != null && !column.getComment().trim().isEmpty()) {
+                sb.append(" COMMENT '").append(column.getComment().replaceAll("[\"']", "")).append("'");
+            }
+            
+            if (i < columns.size() - 1) {
+                sb.append(",");
+            }
+            sb.append("\n");
+        }
+        
+        // Add primary key if exists
+        List<String> primaryKeys = columns.stream()
+                .filter(Column::isKeyFlag)
+                .map(Column::getName)
+                .collect(Collectors.toList());
+        
+        if (!primaryKeys.isEmpty()) {
+            sb.append("    ,PRIMARY KEY (");
+            sb.append(primaryKeys.stream().map(pk -> "`" + pk + "`").collect(Collectors.joining(", ")));
+            sb.append(")\n");
+        }
+        
+        sb.append(")");
+        
+        // Add table comment if exists
+        if (table.getComment() != null && !table.getComment().trim().isEmpty()) {
+            sb.append(" COMMENT '").append(table.getComment().replaceAll("[\"']", "")).append("'");
+        }
+        
+        // Add table options if exists
+        if (table.getOptions() != null && !table.getOptions().trim().isEmpty()) {
+            sb.append(" WITH (\n").append(table.getOptions()).append("\n)");
+        }
+        
+        return sb.toString();
     }
 
     @Override
@@ -293,7 +341,9 @@ public class PaimonDriver extends AbstractDriver<PaimonConfig> {
 
     @Override
     public String generateCreateTableSql(Table table) {
-        return null;
+        String genTableSql = getCreateTableSql(table);
+        log.info("Auto generateCreateTableSql {}", genTableSql);
+        return genTableSql;
     }
 
     @Override
@@ -312,8 +362,51 @@ public class PaimonDriver extends AbstractDriver<PaimonConfig> {
     }
 
     @Override
+    public String getSqlSelect(Table table) {
+        List<Column> columns = table.getColumns();
+        StringBuilder sb = new StringBuilder("SELECT\n");
+        for (int i = 0; i < columns.size(); i++) {
+            sb.append("    ");
+            if (i > 0) {
+                sb.append(",");
+            }
+            String columnComment = columns.get(i).getComment();
+            if (columnComment != null && !columnComment.trim().isEmpty()) {
+                if (columnComment.contains("\'") || columnComment.contains("\"")) {
+                    columnComment = columnComment.replaceAll("\"|'", "");
+                }
+                sb.append("`")
+                        .append(columns.get(i).getName())
+                        .append("`  --  ")
+                        .append(columnComment)
+                        .append(" \n");
+            } else {
+                sb.append("`").append(columns.get(i).getName()).append("` \n");
+            }
+        }
+        if (table.getComment() != null && !table.getComment().trim().isEmpty()) {
+            sb.append(String.format(" FROM `%s`.`%s`; -- %s\n", table.getSchema(), table.getName(), table.getComment()));
+        } else {
+            sb.append(String.format(" FROM `%s`.`%s`;\n", table.getSchema(), table.getName()));
+        }
+        return sb.toString();
+    }
+
+    @Override
     public StringBuilder genQueryOption(QueryData queryData) {
-        return null;
+        StringBuilder optionBuilder = new StringBuilder()
+                .append(String.format("SELECT * FROM `%s`.`%s`", queryData.getSchemaName(), queryData.getTableName()));
+        
+        QueryData.Option option = queryData.getOption();
+        if (option.getWhere() != null && !option.getWhere().isEmpty()) {
+            optionBuilder.append(" WHERE ").append(option.getWhere());
+        }
+        if (option.getOrder() != null && !option.getOrder().isEmpty()) {
+            optionBuilder.append(" ORDER BY ").append(option.getOrder());
+        }
+        optionBuilder.append(" LIMIT ").append(option.getLimitEnd() - option.getLimitStart());
+        
+        return optionBuilder;
     }
 
     @Override
