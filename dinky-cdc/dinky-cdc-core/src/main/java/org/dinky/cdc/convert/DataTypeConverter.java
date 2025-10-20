@@ -370,7 +370,12 @@ public class DataTypeConverter {
                     .atZone(ZoneId.systemDefault())
                     .toLocalDateTime();
         } else if (obj instanceof String) {
-            return Instant.parse((String) obj).atZone(ZoneId.systemDefault()).toLocalDateTime();
+            String str = (String) obj;
+            if (str.contains("T") || str.contains("Z") || str.contains("+")) {
+                return Instant.parse(str).atZone(ZoneId.systemDefault()).toLocalDateTime();
+            } else {
+                return LocalDateTime.parse(str.replace(' ', 'T'));
+            }
         } else if (obj instanceof Long) {
             TimestampType logicalType1 = (TimestampType) logicalType;
             if (logicalType1.getPrecision() == 3) {
@@ -402,7 +407,12 @@ public class DataTypeConverter {
                     .atZone(timeZone)
                     .toLocalDateTime();
         } else if (obj instanceof String) {
-            return Instant.parse((String) obj).atZone(timeZone).toLocalDateTime();
+            String str = (String) obj;
+            if (str.contains("T") || str.contains("Z") || str.contains("+")) {
+                return Instant.parse(str).atZone(timeZone).toLocalDateTime();
+            } else {
+                return LocalDateTime.parse(str.replace(' ', 'T'));
+            }
         } else if (obj instanceof Long) {
             TimestampType logicalType1 = (TimestampType) logicalType;
             if (logicalType1.getPrecision() == 3) {
@@ -431,7 +441,12 @@ public class DataTypeConverter {
                     .atZone(ZoneId.systemDefault())
                     .toLocalDateTime();
         } else if (obj instanceof String) {
-            return Instant.parse((String) obj).atZone(ZoneId.systemDefault()).toLocalDateTime();
+            String str = (String) obj;
+            if (str.contains("T") || str.contains("Z") || str.contains("+")) {
+                return Instant.parse(str).atZone(ZoneId.systemDefault()).toLocalDateTime();
+            } else {
+                return LocalDateTime.parse(str.replace(' ', 'T'));
+            }
         } else if (obj instanceof Long) {
             TimestampType logicalType1 = (TimestampType) logicalType;
             if (logicalType1.getPrecision() == 3) {

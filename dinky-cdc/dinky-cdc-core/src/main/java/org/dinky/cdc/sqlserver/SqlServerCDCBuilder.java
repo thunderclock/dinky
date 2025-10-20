@@ -69,11 +69,17 @@ public class SqlServerCDCBuilder extends AbstractCDCBuilder implements CDCBuilde
         debeziumProperties.setProperty("bigint.unsigned.handling.mode", "long");
         debeziumProperties.setProperty("decimal.handling.mode", "string");
 
+        // 先加载用户自定义的debezium配置
         config.getDebezium().forEach((key, value) -> {
             if (Asserts.isNotNullString(key) && Asserts.isNotNullString(value)) {
                 debeziumProperties.setProperty(key, value);
             }
         });
+        
+        // 注册自定义的时间类型转换器，解决时区转换问题（放在最后，确保不被用户配置覆盖）
+        debeziumProperties.setProperty("converters", "datetime");
+        debeziumProperties.setProperty("datetime.type", "org.dinky.cdc.debezium.converter.SqlServerDebeziumConverter");
+        debeziumProperties.setProperty("datetime.database.type", "sqlserver");
 
         // 添加jdbc参数注入
         Properties jdbcProperties = new Properties();

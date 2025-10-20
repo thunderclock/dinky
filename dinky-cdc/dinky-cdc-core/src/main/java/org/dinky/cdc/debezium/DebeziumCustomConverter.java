@@ -62,8 +62,9 @@ public class DebeziumCustomConverter implements CustomConverter<SchemaBuilder, R
     protected SchemaBuilder schemaBuilder;
     protected String databaseType;
     protected String schemaNamePrefix;
-    // 获取默认时区
-    protected final ZoneId zoneId = ZoneOffset.systemDefault();
+    // 时区配置，默认使用系统时区以避免时区转换导致的时间差异
+    // 如果需要使用UTC，可以通过配置 timezone=UTC 来指定
+    protected ZoneId zoneId;
 
     @Override
     public void configure(Properties properties) {
@@ -85,6 +86,15 @@ public class DebeziumCustomConverter implements CustomConverter<SchemaBuilder, R
         String dateFormat = properties.getProperty("format.date", DATE_FORMAT);
         String timeFormat = properties.getProperty("format.time", TIME_FORMAT);
         String datetimeFormat = properties.getProperty("format.datetime", DATETIME_FORMAT);
+        // 选填参数：timezone。获取时区配置，默认使用系统默认时区
+        String timezone = properties.getProperty("timezone", "");
+        if (timezone.isEmpty()) {
+            // 默认使用系统时区（通常是Asia/Shanghai），避免时区转换问题
+            this.zoneId = ZoneId.systemDefault();
+        } else {
+            this.zoneId = ZoneId.of(timezone);
+        }
+        logger.info("DebeziumCustomConverter configured with timezone: {}", this.zoneId);
         // 获取自身类的包名+数据库类型为默认schema.name
         String className = this.getClass().getName();
         // 查看是否设置schema.name.prefix

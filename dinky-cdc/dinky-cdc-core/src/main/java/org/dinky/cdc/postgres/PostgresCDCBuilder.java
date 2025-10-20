@@ -62,11 +62,18 @@ public class PostgresCDCBuilder extends AbstractCDCBuilder implements CDCBuilder
         String slotName = config.getSource().get("slot.name");
 
         Properties debeziumProperties = new Properties();
+        
+        // 先加载用户自定义的debezium配置
         for (Map.Entry<String, String> entry : config.getDebezium().entrySet()) {
             if (Asserts.isNotNullString(entry.getKey()) && Asserts.isNotNullString(entry.getValue())) {
                 debeziumProperties.setProperty(entry.getKey(), entry.getValue());
             }
         }
+        
+        // 注册自定义的时间类型转换器，解决时区转换问题（放在最后，确保不被用户配置覆盖）
+        debeziumProperties.setProperty("converters", "datetime");
+        debeziumProperties.setProperty("datetime.type", "org.dinky.cdc.debezium.converter.PostgresDebeziumConverter");
+        debeziumProperties.setProperty("datetime.database.type", "postgresql");
 
         PostgreSQLSource.Builder<String> sourceBuilder = PostgreSQLSource.<String>builder()
                 .hostname(config.getHostname())

@@ -8,7 +8,7 @@ RUN  mv /opt/dinky-release* /opt/dinky  && mkdir /opt/dinky/config/static
 ADD  build/dist/ /opt/dinky/config/static
 
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/flink:1.18.1-scala_2.12-java17
-ARG FLINK_VERSION
+ARG FLINK_VERSION=1.18
 COPY --from=builder /opt/dinky /opt/dinky
 RUN rm -f /opt/flink/lib/flink-table-planner-loader*.jar  &&  cp /opt/flink/opt/flink-python*.jar /opt/flink/lib/ && cp /opt/flink/opt/flink-table-planner*.jar /opt/flink/lib/ 2>/dev/null || : && ln -s /opt/flink/lib/*  /opt/dinky/extends/flink${FLINK_VERSION}/
 ENV FLINK_VERSION=${FLINK_VERSION}

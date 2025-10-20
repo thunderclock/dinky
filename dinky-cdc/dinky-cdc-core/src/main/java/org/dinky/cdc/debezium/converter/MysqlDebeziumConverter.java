@@ -25,6 +25,8 @@ import org.apache.flink.cdc.connectors.shaded.org.apache.kafka.connect.data.Sche
 
 import java.time.Instant;
 import java.time.ZoneOffset;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.debezium.spi.converter.RelationalColumn;
 
@@ -34,6 +36,8 @@ import io.debezium.spi.converter.RelationalColumn;
  * @date 2024/2/6
  */
 public class MysqlDebeziumConverter extends DebeziumCustomConverter {
+
+    Logger logger = LoggerFactory.getLogger(MysqlDebeziumConverter.class);
 
     @Override
     public void converterFor(

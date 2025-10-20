@@ -64,11 +64,18 @@ public class OracleCDCBuilder extends AbstractCDCBuilder implements CDCBuilder {
     @Override
     public DataStreamSource<String> build(StreamExecutionEnvironment env) {
         Properties properties = new Properties();
+        
+        // 先加载用户自定义的debezium配置
         config.getDebezium().forEach((key, value) -> {
             if (Asserts.isNotNullString(key) && Asserts.isNotNullString(value)) {
                 properties.setProperty(key, value);
             }
         });
+        
+        // 注册自定义的时间类型转换器，解决时区转换问题（放在最后，确保不被用户配置覆盖）
+        properties.setProperty("converters", "datetime");
+        properties.setProperty("datetime.type", "org.dinky.cdc.debezium.converter.OracleDebeziumConverter");
+        properties.setProperty("datetime.database.type", "oracle");
 
         OracleSource.Builder<String> sourceBuilder = OracleSource.<String>builder()
                 .hostname(config.getHostname())

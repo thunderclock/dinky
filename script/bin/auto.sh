@@ -179,8 +179,25 @@ PARAMS_OPT="-Ddinky.logs.path=${DINKY_LOG_PATH} -Ddinky.root.path=${APP_HOME} -D
 JAR_PARAMS_OPT="--logging.config=${LOG_CONFIG}"
 # JMX path
 JMX="-javaagent:$APP_HOME/lib/jmx_prometheus_javaagent-0.20.0.jar=10087:$APP_HOME/config/jmx/jmx_exporter_config.yaml"
+
+# Java 9+ module access parameters (for Java 11, 17, 21)
+JAVA_MODULE_OPTS="--add-opens=java.base/java.util=ALL-UNNAMED \
+--add-opens=java.base/java.lang=ALL-UNNAMED \
+--add-opens=java.base/java.lang.invoke=ALL-UNNAMED \
+--add-opens=java.base/java.lang.reflect=ALL-UNNAMED \
+--add-opens=java.base/java.io=ALL-UNNAMED \
+--add-opens=java.base/java.net=ALL-UNNAMED \
+--add-opens=java.base/java.nio=ALL-UNNAMED \
+--add-opens=java.base/java.util.concurrent=ALL-UNNAMED \
+--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED \
+--add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+--add-opens=java.base/sun.nio.cs=ALL-UNNAMED \
+--add-opens=java.base/sun.security.action=ALL-UNNAMED \
+--add-opens=java.base/sun.util.calendar=ALL-UNNAMED \
+--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
+
 #JVM OPTS
-JVM_OPTS="-Xms512M -Xmx2048M -XX:PermSize=512M -XX:MaxPermSize=1024M"
+JVM_OPTS="-Xms512M -Xmx2048M -XX:PermSize=512M -XX:MaxPermSize=1024M ${JAVA_MODULE_OPTS}"
 
 # Check whether the pid path exists
 PID_PATH="${APP_HOME}/run"

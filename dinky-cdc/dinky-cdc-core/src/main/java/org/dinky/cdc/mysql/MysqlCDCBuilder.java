@@ -38,8 +38,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class MysqlCDCBuilder extends AbstractCDCBuilder {
 
+    private static final Logger logger = LoggerFactory.getLogger(MysqlCDCBuilder.class);
     public static final String KEY_WORD = "mysql-cdc";
     private static final String METADATA_TYPE = "MySql";
 
@@ -83,16 +87,30 @@ public class MysqlCDCBuilder extends AbstractCDCBuilder {
         Properties debeziumProperties = new Properties();
         debeziumProperties.setProperty("bigint.unsigned.handling.mode", "long");
         debeziumProperties.setProperty("decimal.handling.mode", "string");
+        
         if (Asserts.isNotNullString(serverTimeZone)
                 && Asserts.isNotNullString(config.getDebezium().get("datetime.type"))) {
             debeziumProperties.setProperty("datetime.format.timestamp.zone", serverTimeZone);
         }
 
+        // 先加载用户自定义的debezium配置
         config.getDebezium().forEach((key, value) -> {
             if (Asserts.isNotNullString(key) && Asserts.isNotNullString(value)) {
                 debeziumProperties.setProperty(key, value);
             }
         });
+        
+        // 注册自定义的时间类型转换器，解决时区转换问题（放在最后，确保不被用户配置覆盖）
+        debeziumProperties.setProperty("converters", "datetime");
+        debeziumProperties.setProperty("datetime.type", "org.dinky.cdc.debezium.converter.MysqlDebeziumConverter");
+        debeziumProperties.setProperty("datetime.database.type", "mysql");
+        
+        if (Asserts.isNotNullString(serverTimeZone)) {
+            // 将serverTimeZone传递给自定义converter
+            debeziumProperties.setProperty("datetime.timezone", serverTimeZone);
+        }
+        
+        logger.info("Debezium properties configured with custom converter: {}", debeziumProperties);
 
         // 添加jdbc参数注入
         Properties jdbcProperties = new Properties();
