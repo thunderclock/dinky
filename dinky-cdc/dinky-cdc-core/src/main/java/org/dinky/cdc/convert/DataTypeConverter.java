@@ -130,7 +130,7 @@ public class DataTypeConverter {
             case BIGINT:
                 return convertToLong(value);
             case DATE:
-                return convertToDate(value);
+                return convertToDate(value, timeZone);
             case TIME_WITHOUT_TIME_ZONE:
                 return convertToTime(value, logicalType, timeZone);
             case TIMESTAMP_WITHOUT_TIME_ZONE:
@@ -176,7 +176,7 @@ public class DataTypeConverter {
             case BIGINT:
                 return convertToLong(value);
             case DATE:
-                return convertToDate(value);
+                return convertToDate(value, timeZone);
             case TIME_WITHOUT_TIME_ZONE:
                 return convertToTime(value, logicalType, timeZone);
             case TIMESTAMP_WITHOUT_TIME_ZONE:
@@ -268,11 +268,11 @@ public class DataTypeConverter {
         }
     }
 
-    private static Object convertToDate(Object obj) {
-        return toLocalDate(obj);
+    private static Object convertToDate(Object obj, ZoneId timeZone) {
+        return toLocalDate(obj, timeZone);
     }
 
-    private static LocalDate toLocalDate(Object obj) {
+    private static LocalDate toLocalDate(Object obj, ZoneId timeZone) {
         if (obj instanceof Long) {
             // Assume the value is the epoch day number
             return LocalDate.ofEpochDay((Long) obj);
@@ -280,6 +280,52 @@ public class DataTypeConverter {
         if (obj instanceof Integer) {
             // Assume the value is the epoch day number
             return LocalDate.ofEpochDay((Integer) obj);
+        }
+        if (obj instanceof LocalDate) {
+            return (LocalDate) obj;
+        }
+        if (obj instanceof LocalDateTime) {
+            return ((LocalDateTime) obj).toLocalDate();
+        }
+        if (obj instanceof java.sql.Date) {
+            return ((java.sql.Date) obj).toLocalDate();
+        }
+        if (obj instanceof java.sql.Timestamp) {
+            return ((java.sql.Timestamp) obj).toLocalDateTime().toLocalDate();
+        }
+        if (obj instanceof java.util.Date) {
+            return Instant.ofEpochMilli(((java.util.Date) obj).getTime())
+                    .atZone(timeZone)
+                    .toLocalDate();
+        }
+        if (obj instanceof CharSequence) {
+            String value = obj.toString().trim();
+            if (value.isEmpty()) {
+                return null;
+            }
+            try {
+                return LocalDate.parse(value);
+            } catch (RuntimeException e) {
+                try {
+                    return Instant.parse(value).atZone(timeZone).toLocalDate();
+                } catch (RuntimeException ignored) {
+                }
+                try {
+                    return LocalDateTime.parse(value.replace(' ', 'T')).toLocalDate();
+                } catch (RuntimeException ex) {
+                    try {
+                        long epochDay = Long.parseLong(value);
+                        return LocalDate.ofEpochDay(epochDay);
+                    } catch (NumberFormatException numberFormatException) {
+                        throw new IllegalArgumentException(
+                                "Unable to convert to LocalDate from unexpected value '"
+                                        + obj
+                                        + "' of type "
+                                        + obj.getClass().getName(),
+                                ex);
+                    }
+                }
+            }
         }
         throw new IllegalArgumentException("Unable to convert to LocalDate from unexpected value '"
                 + obj
