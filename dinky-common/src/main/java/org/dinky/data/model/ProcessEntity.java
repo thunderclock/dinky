@@ -40,6 +40,9 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class ProcessEntity {
+    private static final int MAX_LOG_BUFFER_LENGTH = 512 * 1024;
+    private static final int LOG_BUFFER_TARGET_LENGTH = 384 * 1024;
+
     private String key;
     private String title;
     private StringBuilder log;
@@ -53,6 +56,20 @@ public class ProcessEntity {
     private long threadId;
 
     public void appendLog(String str) {
+        if (log == null) {
+            log = new StringBuilder();
+        }
         log.append(str).append(CommonConstant.LineSep);
+        trimIfNecessary();
+    }
+
+    private void trimIfNecessary() {
+        if (log.length() <= MAX_LOG_BUFFER_LENGTH) {
+            return;
+        }
+        int preserveFrom = Math.max(0, log.length() - LOG_BUFFER_TARGET_LENGTH);
+        int nextLineBreak = log.indexOf(CommonConstant.LineSep, preserveFrom);
+        int trimTo = nextLineBreak > 0 ? nextLineBreak + CommonConstant.LineSep.length() : preserveFrom;
+        log.delete(0, trimTo);
     }
 }

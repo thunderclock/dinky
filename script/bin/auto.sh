@@ -197,7 +197,24 @@ JAVA_MODULE_OPTS="--add-opens=java.base/java.util=ALL-UNNAMED \
 --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
 
 #JVM OPTS
-JVM_OPTS="-Xms512M -Xmx2048M -XX:PermSize=512M -XX:MaxPermSize=1024M ${JAVA_MODULE_OPTS}"
+JVM_HEAP_SIZE=${DINKY_JVM_HEAP_SIZE:-}
+if [ -n "${JVM_HEAP_SIZE}" ]; then
+  JVM_XMS=${DINKY_JVM_XMS:-${JVM_HEAP_SIZE}}
+  JVM_XMX=${DINKY_JVM_XMX:-${JVM_HEAP_SIZE}}
+else
+  JVM_XMS=${DINKY_JVM_XMS:-512M}
+  JVM_XMX=${DINKY_JVM_XMX:-2048M}
+fi
+
+if [ "${JAVA_VERSION}" = "1.8" ]; then
+  PERM_OPTS="-XX:PermSize=${DINKY_JVM_PERM_SIZE:-512M} -XX:MaxPermSize=${DINKY_JVM_MAX_PERM_SIZE:-1024M}"
+else
+  PERM_OPTS="-XX:MetaspaceSize=${DINKY_JVM_METASPACE_SIZE:-256M} -XX:MaxMetaspaceSize=${DINKY_JVM_MAX_METASPACE_SIZE:-512M}"
+fi
+
+HEAP_SIZE_OPTS="-XX:InitialHeapSize=${JVM_XMS} -XX:MaxHeapSize=${JVM_XMX}"
+
+JVM_OPTS="-Xms${JVM_XMS} -Xmx${JVM_XMX} ${HEAP_SIZE_OPTS} ${PERM_OPTS} ${JAVA_MODULE_OPTS} ${DINKY_JVM_OPTS_EXTRA}"
 
 # Check whether the pid path exists
 PID_PATH="${APP_HOME}/run"
