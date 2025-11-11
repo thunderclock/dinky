@@ -36,7 +36,7 @@ public class FlinkStatementUtil {
 
     public static String getCDCInsertSql(Table table, String targetName, String sourceName, FlinkCDCConfig config) {
         StringBuilder sb = new StringBuilder("INSERT INTO ");
-        sb.append(targetName);
+        sb.append(quoteIdentifier(targetName));
         sb.append(" SELECT\n");
         for (int i = 0; i < table.getColumns().size(); i++) {
             sb.append("    ");
@@ -45,10 +45,21 @@ public class FlinkStatementUtil {
             }
             sb.append(getColumnProcessing(table.getColumns().get(i), config)).append(" \n");
         }
-        sb.append(" FROM `");
-        sb.append(sourceName);
-        sb.append("`");
+        sb.append(" FROM ");
+        sb.append(quoteIdentifier(sourceName));
         return sb.toString();
+    }
+
+    private static String quoteIdentifier(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return identifier;
+        }
+        if (identifier.contains("`")) {
+            return identifier;
+        }
+        return java.util.Arrays.stream(identifier.split("\\."))
+                .map(part -> "`" + part + "`")
+                .collect(java.util.stream.Collectors.joining("."));
     }
 
     public static String getColumnProcessing(Column column, FlinkCDCConfig config) {
