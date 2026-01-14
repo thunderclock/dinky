@@ -180,13 +180,38 @@ public class Job2MysqlHandler extends AbsJobHandler {
         history.setClusterId(clusterId);
         historyService.updateById(history);
 
-        if (!job.isPipeline()) {
+        // For batch jobs (non-pipeline), also create JobInstance and add to refresh queue
+        // This ensures batch jobs can be monitored and their status can be automatically refreshed
+        // This fixes the issue where batch jobs don't automatically refresh status after the first execution
+        boolean needJobInstance = job.isPipeline() 
+                || (job.getJobConfig().isBatchModel() && Asserts.isNotNullString(job.getJobId()) 
+                        && !job.getJobId().equals("unknown"));
+
+        if (!needJobInstance) {
             return true;
         }
 
+        // For batch jobs, use jobId as JID if jids list is empty
+        // This handles the case where batch jobs complete too quickly and JobClient is not available
+        String jid;
         if (Asserts.isNullCollection(job.getJids())) {
-            throw new BusException("Job ID retrieval failed, possibly due to timeout of job deployment. "
-                    + "Please modify the system configuration to increase the waiting time for job submission.");
+            if (job.getJobConfig().isBatchModel()) {
+                // For batch jobs, try to use jobId as JID
+                if (Asserts.isNotNullString(job.getJobId()) && !job.getJobId().equals("unknown")) {
+                    jid = job.getJobId();
+                } else {
+                    // If jobId is also empty, generate a temporary JID for batch jobs
+                    // This ensures batch jobs can still be tracked even if they complete very quickly
+                    jid = "batch-" + job.getId() + "-" + System.currentTimeMillis();
+                    log.warn("Batch job completed too quickly, JobClient not available. Using temporary JID: {}", jid);
+                }
+            } else {
+                // For non-pipeline, non-batch jobs without JID, throw exception as before
+                throw new BusException("Job ID retrieval failed, possibly due to timeout of job deployment. "
+                        + "Please modify the system configuration to increase the waiting time for job submission.");
+            }
+        } else {
+            jid = job.getJids().get(0);
         }
 
         JobInstance jobInstance = history.buildJobInstance();
@@ -194,7 +219,7 @@ public class Job2MysqlHandler extends AbsJobHandler {
         jobInstance.setClusterId(clusterId);
         jobInstance.setTaskId(taskId);
         jobInstance.setName(job.getJobConfig().getJobName());
-        jobInstance.setJid(job.getJids().get(0));
+        jobInstance.setJid(jid);
         jobInstance.setStep(job.getJobConfig().getStep());
         jobInstance.setStatus(JobStatus.INITIALIZING.getValue());
         jobInstanceService.save(jobInstance);

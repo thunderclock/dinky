@@ -139,14 +139,56 @@ public class JobRefreshHandler {
             if (jobStatus.isPresent() && JobStatus.isDone(jobStatus.get().getValue())) {
                 jobInstance.setStatus(jobStatus.get().getValue());
             } else {
-                // If the job fails to get it, the default Finish Time is the current time
-                jobInstance.setStatus(JobStatus.RECONNECTING.getValue());
-                jobInstance.setError(jobDataDto.getErrorMsg());
-                jobInfoDetail.getJobDataDto().setError(true);
-                jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                // For INITIALIZING and CREATED status, keep the status and continue refreshing
+                // This is especially important for batch jobs which may take time to initialize
+                String currentStatus = jobInstance.getStatus();
+                if (JobStatus.INITIALIZING.getValue().equals(currentStatus)
+                        || JobStatus.CREATED.getValue().equals(currentStatus)) {
+                    // Keep INITIALIZING/CREATED status and continue refreshing
+                    // Only set RECONNECTING if the job has been in this state for more than 2 minutes
+                    LocalDateTime createTime = jobInstance.getCreateTime();
+                    if (createTime != null) {
+                        long durationMinutes = Duration.between(createTime, LocalDateTime.now()).toMinutes();
+                        if (durationMinutes > 2) {
+                            // If INITIALIZING/CREATED for more than 2 minutes and still can't get status,
+                            // set to RECONNECTING
+                            jobInstance.setStatus(JobStatus.RECONNECTING.getValue());
+                            jobInstance.setError(jobDataDto.getErrorMsg());
+                            jobInfoDetail.getJobDataDto().setError(true);
+                            jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                        } else {
+                            // Keep the current status and continue refreshing
+                            jobInfoDetail.getJobDataDto().setError(true);
+                            jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                        }
+                    } else {
+                        // If createTime is null, keep current status
+                        jobInfoDetail.getJobDataDto().setError(true);
+                        jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                    }
+                } else {
+                    // For other statuses, set to RECONNECTING as before
+                    jobInstance.setStatus(JobStatus.RECONNECTING.getValue());
+                    jobInstance.setError(jobDataDto.getErrorMsg());
+                    jobInfoDetail.getJobDataDto().setError(true);
+                    jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                }
             }
             if (jobInstance.getFinishTime() == null || TimeUtil.localDateTimeToLong(jobInstance.getFinishTime()) < 1) {
-                jobInstance.setFinishTime(LocalDateTime.now());
+                // Only set finish time if not INITIALIZING or CREATED, or if it's been more than 2 minutes
+                String currentStatus = jobInstance.getStatus();
+                if (!JobStatus.INITIALIZING.getValue().equals(currentStatus)
+                        && !JobStatus.CREATED.getValue().equals(currentStatus)) {
+                    jobInstance.setFinishTime(LocalDateTime.now());
+                } else {
+                    LocalDateTime createTime = jobInstance.getCreateTime();
+                    if (createTime != null) {
+                        long durationMinutes = Duration.between(createTime, LocalDateTime.now()).toMinutes();
+                        if (durationMinutes > 2) {
+                            jobInstance.setFinishTime(LocalDateTime.now());
+                        }
+                    }
+                }
             }
         } else {
             jobInfoDetail.setJobDataDto(jobDataDto);
