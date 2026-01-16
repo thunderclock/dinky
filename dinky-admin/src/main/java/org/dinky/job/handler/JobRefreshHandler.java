@@ -102,17 +102,33 @@ public class JobRefreshHandler {
      * @return True if the job is done, false otherwise.
      */
     public static boolean refreshJob(JobInfoDetail jobInfoDetail, boolean needSave) {
+        // Add null check to prevent NPE
+        if (Asserts.isNull(jobInfoDetail)) {
+            log.warn("JobInfoDetail is null, skip refresh");
+            return true;
+        }
+        
+        JobInstance jobInstance = jobInfoDetail.getInstance();
+        if (Asserts.isNull(jobInstance)) {
+            log.warn("JobInstance is null, skip refresh for jobInfoDetail id: {}", jobInfoDetail.getId());
+            return true;
+        }
+        
         if (Asserts.isNull(TenantContextHolder.get())) {
-            jobInstanceService.initTenantByJobInstanceId(
-                    jobInfoDetail.getInstance().getId());
+            jobInstanceService.initTenantByJobInstanceId(jobInstance.getId());
         }
         log.debug(
                 "Start to refresh job: {}->{}",
-                jobInfoDetail.getInstance().getId(),
-                jobInfoDetail.getInstance().getName());
+                jobInstance.getId(),
+                jobInstance.getName());
 
-        JobInstance jobInstance = jobInfoDetail.getInstance();
         JobDataDto jobDataDto = jobInfoDetail.getJobDataDto();
+        // Initialize jobDataDto if null to prevent NPE
+        if (Asserts.isNull(jobDataDto)) {
+            jobDataDto = JobDataDto.builder().id(jobInstance.getId()).build();
+            jobInfoDetail.setJobDataDto(jobDataDto);
+        }
+        
         String oldStatus = jobInstance.getStatus();
 
         // Cluster information is missing and cannot be monitored
@@ -126,18 +142,71 @@ public class JobRefreshHandler {
 
         // Update the value of JobData from the flink api while ignoring the null value to prevent
         // some other configuration from being overwritten
-        BeanUtil.copyProperties(
-                getJobData(
-                        jobInstance.getId(),
-                        jobInfoDetail.getClusterInstance().getJobManagerHost(),
-                        jobInfoDetail.getInstance().getJid()),
-                jobDataDto,
-                CopyOptions.create().ignoreNullValue());
+        String jobManagerHost = jobInfoDetail.getClusterInstance().getJobManagerHost();
+        String jid = jobInstance.getJid();
+        
+        // Add null checks to prevent NPE
+        if (Asserts.isNull(jobManagerHost) || Asserts.isNull(jid)) {
+            log.warn("JobManagerHost or JID is null for job {}, jobManagerHost: {}, jid: {}", 
+                    jobInstance.getId(), jobManagerHost, jid);
+            jobDataDto.setError(true);
+            jobDataDto.setErrorMsg("JobManagerHost or JID is null");
+        } else {
+            JobDataDto newJobDataDto = getJobData(
+                    jobInstance.getId(),
+                    jobManagerHost,
+                    jid);
+            
+            // Ensure newJobDataDto is not null before copying
+            if (Asserts.isNotNull(newJobDataDto)) {
+                BeanUtil.copyProperties(
+                        newJobDataDto,
+                        jobDataDto,
+                        CopyOptions.create().ignoreNullValue());
+            }
+        }
 
         if (Asserts.isNull(jobDataDto.getJob()) || jobDataDto.isError()) {
+            // Try to get job status from Gateway first (this works even when JobManager is down)
             Optional<JobStatus> jobStatus = getJobStatus(jobInfoDetail);
+            
+            // Check if connection failed due to JobManager shutdown (Connection refused or File not found)
+            boolean isConnectionRefused = jobDataDto.isError() 
+                    && jobDataDto.getErrorMsg() != null 
+                    && (jobDataDto.getErrorMsg().contains("Connection refused")
+                            || jobDataDto.getErrorMsg().contains("File not found")
+                            || jobDataDto.getErrorMsg().contains("ConnectException"));
+            
             if (jobStatus.isPresent() && JobStatus.isDone(jobStatus.get().getValue())) {
+                // If we can get final status from Gateway, use it
                 jobInstance.setStatus(jobStatus.get().getValue());
+                log.info("Job {} status updated to {} via Gateway (JobManager connection failed)", 
+                        jobInstance.getId(), jobStatus.get().getValue());
+            } else if (isConnectionRefused) {
+                // Connection refused usually means JobManager is down, which happens when job is finished
+                // Always try to get status from HistoryServer when connection fails
+                String currentStatus = jobInstance.getStatus();
+                boolean triedHistoryServer = tryGetJobStatusFromHistoryServer(jobInstance, jobDataDto, jid);
+                
+                if (!triedHistoryServer) {
+                    // If HistoryServer also failed, check if current status is already done
+                    if (JobStatus.isDone(currentStatus)) {
+                        // Job is already marked as done, keep the status
+                        log.debug("Job {} connection refused but status is already done: {}", 
+                                jobInstance.getId(), currentStatus);
+                    } else {
+                        // Try to get final status from Gateway one more time
+                        if (jobStatus.isPresent()) {
+                            jobInstance.setStatus(jobStatus.get().getValue());
+                            log.info("Job {} connection refused, status updated to {} via Gateway", 
+                                    jobInstance.getId(), jobStatus.get().getValue());
+                        } else {
+                            // Cannot get status from Gateway or HistoryServer, keep current status
+                            log.debug("Job {} connection refused, cannot get status from Gateway or HistoryServer, will retry", 
+                                    jobInstance.getId());
+                        }
+                    }
+                }
             } else {
                 // For INITIALIZING and CREATED status, keep the status and continue refreshing
                 // This is especially important for batch jobs which may take time to initialize
@@ -148,8 +217,40 @@ public class JobRefreshHandler {
                     // Only set RECONNECTING if the job has been in this state for more than 2 minutes
                     LocalDateTime createTime = jobInstance.getCreateTime();
                     if (createTime != null) {
+                        long durationSeconds = Duration.between(createTime, LocalDateTime.now()).getSeconds();
                         long durationMinutes = Duration.between(createTime, LocalDateTime.now()).toMinutes();
-                        if (durationMinutes > 2) {
+                        
+                        // For very short-lived jobs (completed within 1 second), try to get final status
+                        // This handles cases where jobs finish before status can be properly refreshed
+                        if (durationSeconds <= 1 && jobStatus.isPresent()) {
+                            // If we can get status from gateway, use it even if jobData is not available
+                            jobInstance.setStatus(jobStatus.get().getValue());
+                            log.debug("Job {} completed quickly ({}s), status updated to {}", 
+                                    jobInstance.getId(), durationSeconds, jobStatus.get().getValue());
+                        } else if (jobDataDto.isError()) {
+                            // If any error occurred (including BackPressure errors), try to get status from HistoryServer
+                            // This handles cases where job finished but status refresh failed due to API errors
+                            boolean triedHistoryServer = tryGetJobStatusFromHistoryServer(jobInstance, jobDataDto, jid);
+                            
+                            if (!triedHistoryServer) {
+                                // If HistoryServer also failed, check if we can get status from Gateway
+                                if (jobStatus.isPresent()) {
+                                    jobInstance.setStatus(jobStatus.get().getValue());
+                                    log.info("Job {} INITIALIZING with error, status updated to {} via Gateway", 
+                                            jobInstance.getId(), jobStatus.get().getValue());
+                                } else if (durationMinutes > 2) {
+                                    // If still can't get status after 2 minutes, set to RECONNECTING
+                                    jobInstance.setStatus(JobStatus.RECONNECTING.getValue());
+                                    jobInstance.setError(jobDataDto.getErrorMsg());
+                                    jobInfoDetail.getJobDataDto().setError(true);
+                                    jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                                } else {
+                                    // Keep the current status and continue refreshing
+                                    jobInfoDetail.getJobDataDto().setError(true);
+                                    jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
+                                }
+                            }
+                        } else if (durationMinutes > 2) {
                             // If INITIALIZING/CREATED for more than 2 minutes and still can't get status,
                             // set to RECONNECTING
                             jobInstance.setStatus(JobStatus.RECONNECTING.getValue());
@@ -174,17 +275,28 @@ public class JobRefreshHandler {
                     jobInfoDetail.getJobDataDto().setErrorMsg(jobDataDto.getErrorMsg());
                 }
             }
+            // Set finish time for done jobs or when connection is refused (JobManager shutdown)
             if (jobInstance.getFinishTime() == null || TimeUtil.localDateTimeToLong(jobInstance.getFinishTime()) < 1) {
-                // Only set finish time if not INITIALIZING or CREATED, or if it's been more than 2 minutes
                 String currentStatus = jobInstance.getStatus();
-                if (!JobStatus.INITIALIZING.getValue().equals(currentStatus)
+                
+                // If job is done or connection refused (likely job finished), set finish time
+                // Note: isConnectionRefused is already defined above, reuse it
+                if (JobStatus.isDone(currentStatus) || isConnectionRefused) {
+                    jobInstance.setFinishTime(LocalDateTime.now());
+                } else if (!JobStatus.INITIALIZING.getValue().equals(currentStatus)
                         && !JobStatus.CREATED.getValue().equals(currentStatus)) {
                     jobInstance.setFinishTime(LocalDateTime.now());
                 } else {
+                    // For INITIALIZING/CREATED, set finish time if connection failed and job has been running for a while
+                    // This handles cases where job finished but status wasn't updated
                     LocalDateTime createTime = jobInstance.getCreateTime();
                     if (createTime != null) {
+                        long durationSeconds = Duration.between(createTime, LocalDateTime.now()).getSeconds();
                         long durationMinutes = Duration.between(createTime, LocalDateTime.now()).toMinutes();
-                        if (durationMinutes > 2) {
+                        // If connection failed and job has been running for more than 30 seconds, set finish time
+                        if (jobDataDto.isError() && durationSeconds > 30) {
+                            jobInstance.setFinishTime(LocalDateTime.now());
+                        } else if (durationMinutes > 2) {
                             jobInstance.setFinishTime(LocalDateTime.now());
                         }
                     }
@@ -277,6 +389,16 @@ public class JobRefreshHandler {
      * @return {@link org.dinky.data.dto.JobDataDto}.
      */
     public static JobDataDto getJobData(Integer id, String jobManagerHost, String jobId) {
+        // Add null checks to prevent NPE
+        if (Asserts.isNull(jobId) || Asserts.isNull(jobManagerHost)) {
+            log.warn("JobId or JobManagerHost is null, jobId: {}, jobManagerHost: {}", jobId, jobManagerHost);
+            return JobDataDto.builder()
+                    .id(id)
+                    .error(true)
+                    .errorMsg("JobId or JobManagerHost is null")
+                    .build();
+        }
+        
         if (FlinkHistoryServer.HISTORY_JOBID_SET.contains(jobId)
                 && SystemConfiguration.getInstances().getUseFlinkHistoryServer().getValue()) {
             jobManagerHost = "127.0.0.1:"
@@ -298,6 +420,11 @@ public class JobRefreshHandler {
             FlinkJobDetailInfo flinkJobDetailInfo =
                     JSON.parseObject(jobInfo.toString()).toJavaObject(FlinkJobDetailInfo.class);
             // 获取 WATERMARK  & BACKPRESSURE 信息
+            // Skip backpressure and watermark for INITIALIZING/CREATED jobs as they may not have data ready
+            String jobState = flinkJobDetailInfo.getState();
+            boolean skipBackpressure = JobStatus.INITIALIZING.getValue().equals(jobState)
+                    || JobStatus.CREATED.getValue().equals(jobState);
+            
             api.getVertices(jobId).forEach(vertex -> {
                 flinkJobDetailInfo.getPlan().getNodes().forEach(planNode -> {
                     if (planNode.getId().equals(vertex)) {
@@ -310,8 +437,36 @@ public class JobRefreshHandler {
                             planNode.setWatermark(watermark);
                         } catch (Exception ignored) {
                         }
-                        planNode.setBackpressure(JsonUtils.toJavaBean(
-                                api.getBackPressure(jobId, vertex), FlinkJobNodeBackPressure.class));
+                        // Add exception handling for backpressure to avoid NoSuchElementException
+                        // when job is in INITIALIZING/CREATED state or just started/finished
+                        if (!skipBackpressure) {
+                            try {
+                                String backPressureResponse = api.getBackPressure(jobId, vertex);
+                                // Check if response is valid JSON before parsing
+                                if (backPressureResponse == null || backPressureResponse.trim().isEmpty()) {
+                                    log.debug("BackPressure API returned empty response for job {} vertex {}, skipping", 
+                                            jobId, vertex);
+                                } else {
+                                    // Check if response contains errors before parsing
+                                    JsonNode backPressureJson = objectMapper.readTree(backPressureResponse);
+                                    if (backPressureJson.has(FlinkRestResultConstant.ERRORS) 
+                                            || backPressureJson.findParent("errors") != null) {
+                                        log.debug("BackPressure API returned errors for job {} vertex {}, skipping", 
+                                                jobId, vertex);
+                                    } else {
+                                        planNode.setBackpressure(JsonUtils.toJavaBean(
+                                                backPressureResponse, FlinkJobNodeBackPressure.class));
+                                    }
+                                }
+                            } catch (Exception e) {
+                                // Log debug message for backpressure fetch failures
+                                // This is expected for jobs that just started or finished, or when Flink
+                                // internal error occurs (e.g., NoSuchElementException in getMaxBackPressureRatio)
+                                // Do not let BackPressure errors affect job status refresh
+                                log.debug("Failed to get backpressure for job {} vertex {}: {} (this will not affect job status)", 
+                                        jobId, vertex, e.getMessage());
+                            }
+                        }
                     }
                 });
             });
@@ -331,9 +486,74 @@ public class JobRefreshHandler {
                     .config(jobConfigInfo)
                     .build();
         } catch (Exception e) {
-            log.warn("Connect {} failed,{}", jobManagerHost, e.getMessage());
-            return builder.id(id).error(true).errorMsg(e.getMessage()).build();
+            // Use safe error message handling to prevent NPE
+            String errorMsg = e.getMessage();
+            if (errorMsg == null) {
+                errorMsg = e.getClass().getName() + (e.getCause() != null ? ": " + e.getCause().getMessage() : "");
+            }
+            
+            // Connection refused and File not found are normal when JobManager is down (job finished)
+            // Use debug level instead of warn to reduce noise in logs
+            if (errorMsg.contains("Connection refused") 
+                    || errorMsg.contains("ConnectException")
+                    || errorMsg.contains("File not found")) {
+                log.debug("Connect {} failed (JobManager may be down): {}", jobManagerHost, errorMsg);
+            } else {
+                log.warn("Connect {} failed, {}", jobManagerHost, errorMsg);
+            }
+            return builder.id(id).error(true).errorMsg(errorMsg).build();
         }
+    }
+
+    /**
+     * Try to get job status from HistoryServer.
+     *
+     * @param jobInstance The job instance.
+     * @param jobDataDto The job data DTO to update.
+     * @param jid The job ID.
+     * @return True if successfully got status from HistoryServer, false otherwise.
+     */
+    private static boolean tryGetJobStatusFromHistoryServer(
+            JobInstance jobInstance, JobDataDto jobDataDto, String jid) {
+        if (!SystemConfiguration.getInstances().getUseFlinkHistoryServer().getValue() 
+                || Asserts.isNull(jid)) {
+            return false;
+        }
+        
+        try {
+            String historyServerHost = "127.0.0.1:"
+                    + SystemConfiguration.getInstances()
+                            .getFlinkHistoryServerPort()
+                            .getValue();
+            JobDataDto historyJobData = getJobData(
+                    jobInstance.getId(),
+                    historyServerHost,
+                    jid);
+            
+            if (historyJobData != null && !historyJobData.isError() 
+                    && historyJobData.getJob() != null) {
+                // Successfully got status from HistoryServer
+                FlinkJobDetailInfo historyJobInfo = historyJobData.getJob();
+                jobInstance.setStatus(historyJobInfo.getState());
+                jobInstance.setDuration(historyJobInfo.getDuration());
+                jobInstance.setCreateTime(TimeUtil.toLocalDateTime(historyJobInfo.getStartTime()));
+                jobInstance.setFinishTime(TimeUtil.toLocalDateTime(historyJobInfo.getEndTime()));
+                
+                // Update jobDataDto with history server data
+                BeanUtil.copyProperties(
+                        historyJobData,
+                        jobDataDto,
+                        CopyOptions.create().ignoreNullValue());
+                
+                log.info("Job {} connection failed, status updated to {} via HistoryServer", 
+                        jobInstance.getId(), historyJobInfo.getState());
+                return true;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to get job status from HistoryServer for job {}: {}", 
+                    jobInstance.getId(), e.getMessage());
+        }
+        return false;
     }
 
     /**

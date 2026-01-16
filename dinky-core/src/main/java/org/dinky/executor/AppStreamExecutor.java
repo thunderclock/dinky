@@ -35,9 +35,14 @@ public class AppStreamExecutor extends Executor {
         this.executorConfig = executorConfig;
         if (executorConfig.isValidConfig()) {
             Configuration configuration = Configuration.fromMap(executorConfig.getConfig());
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
             this.environment = StreamExecutionEnvironment.getExecutionEnvironment(configuration);
         } else {
-            this.environment = StreamExecutionEnvironment.getExecutionEnvironment();
+            Configuration configuration = new Configuration();
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
+            this.environment = StreamExecutionEnvironment.getExecutionEnvironment(configuration);
         }
         init(classLoader);
     }

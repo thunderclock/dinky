@@ -59,7 +59,12 @@ public class TaskWorker implements Runnable {
                         FlinkJobThreadPool.getInstance().removeByTaskConfig(daemonTask.getConfig());
                     }
                 } catch (Exception e) {
-                    log.error(e.getMessage(), e);
+                    // Use safe logging to prevent NPE if getMessage() returns null
+                    String errorMsg = e.getMessage();
+                    if (errorMsg == null) {
+                        errorMsg = e.getClass().getName() + ": " + (e.getCause() != null ? e.getCause().getMessage() : "null");
+                    }
+                    log.error("Task execution failed: {}", errorMsg, e);
                 }
             }
         }

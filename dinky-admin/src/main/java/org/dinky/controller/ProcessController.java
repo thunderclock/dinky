@@ -72,7 +72,11 @@ public class ProcessController {
     @ApiOperation("get process")
     @ApiImplicitParam(name = "processName", value = "process name", dataType = "ProcessEntity")
     public Result<ProcessEntity> getProcessByProcessName(@RequestParam String processName) {
-        return Result.succeed(ConsoleContextHolder.getInstances().getProcess(processName));
+        ProcessEntity process = ConsoleContextHolder.getInstances().getProcess(processName);
+        if (process == null) {
+            return Result.failed("Process " + processName + " not found");
+        }
+        return Result.succeed(process);
     }
 
     @DeleteMapping("/clearProcessLog")

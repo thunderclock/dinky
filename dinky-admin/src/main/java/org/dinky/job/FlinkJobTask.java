@@ -58,6 +58,10 @@ public class FlinkJobTask implements DaemonTask {
 
     private long refreshCount = 0;
 
+    private int consecutiveFailures = 0;
+
+    private static final int MAX_CONSECUTIVE_FAILURES = 3;
+
     private Map<String, Map<String, String>> verticesAndMetricsMap = new ConcurrentHashMap<>();
 
     static {
@@ -101,14 +105,59 @@ public class FlinkJobTask implements DaemonTask {
     public boolean dealTask() {
         volatilityBalance();
 
-        boolean isDone = JobRefreshHandler.refreshJob(jobInfoDetail, isNeedSave());
+        // Add null check to prevent NPE
+        if (Asserts.isNull(jobInfoDetail)) {
+            log.warn("JobInfoDetail is null, task cannot be processed");
+            return true;
+        }
+
+        // If consecutive failures exceed threshold, force refresh by reloading JobInfoDetail
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            log.warn("Job {} has failed {} consecutive times, forcing refresh by reloading JobInfoDetail", 
+                    jobInfoDetail.getInstance().getId(), consecutiveFailures);
+            try {
+                // Force refresh: reload JobInfoDetail from database (similar to isForce=true)
+                JobInfoDetail refreshedDetail = jobInstanceService.getJobInfoDetail(config.getId());
+                if (refreshedDetail != null) {
+                    this.jobInfoDetail = refreshedDetail;
+                    consecutiveFailures = 0; // Reset counter after successful reload
+                    log.info("Job {} JobInfoDetail reloaded successfully", jobInfoDetail.getInstance().getId());
+                } else {
+                    log.warn("Failed to reload JobInfoDetail for job {}", config.getId());
+                }
+            } catch (Exception e) {
+                log.error("Error reloading JobInfoDetail for job {}: {}", config.getId(), e.getMessage(), e);
+            }
+        }
+
+        boolean refreshResult = JobRefreshHandler.refreshJob(jobInfoDetail, isNeedSave());
+        
+        // Check if refresh failed (connection error, etc.)
+        if (jobInfoDetail.getJobDataDto() != null && jobInfoDetail.getJobDataDto().isError()) {
+            String errorMsg = jobInfoDetail.getJobDataDto().getErrorMsg();
+            // Only count connection-related errors as failures
+            if (errorMsg != null && (errorMsg.contains("Connection refused") 
+                    || errorMsg.contains("ConnectException")
+                    || errorMsg.contains("Connection timed out"))) {
+                consecutiveFailures++;
+                log.debug("Job {} refresh failed ({} consecutive failures): {}", 
+                        jobInfoDetail.getInstance().getId(), consecutiveFailures, errorMsg);
+            } else {
+                // Reset counter for non-connection errors
+                consecutiveFailures = 0;
+            }
+        } else {
+            // Reset counter on successful refresh
+            consecutiveFailures = 0;
+        }
+
         if (Asserts.isAllNotNull(jobInfoDetail.getClusterInstance())) {
             JobAlertHandler.getInstance().check(jobInfoDetail);
             if (SystemConfiguration.getInstances().getMetricsSysEnable().getValue()) {
                 JobMetricsHandler.refreshAndWriteFlinkMetrics(jobInfoDetail, verticesAndMetricsMap);
             }
         }
-        return isDone;
+        return refreshResult;
     }
 
     /**

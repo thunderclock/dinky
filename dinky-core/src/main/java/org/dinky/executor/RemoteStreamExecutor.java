@@ -35,11 +35,16 @@ public class RemoteStreamExecutor extends Executor {
         this.executorConfig = executorConfig;
         if (executorConfig.isValidConfig()) {
             Configuration configuration = Configuration.fromMap(executorConfig.getConfig());
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
             this.environment = StreamExecutionEnvironment.createRemoteEnvironment(
                     executorConfig.getHost(), executorConfig.getPort(), configuration, executorConfig.getJarFiles());
         } else {
+            Configuration configuration = new Configuration();
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
             this.environment = StreamExecutionEnvironment.createRemoteEnvironment(
-                    executorConfig.getHost(), executorConfig.getPort(), executorConfig.getJarFiles());
+                    executorConfig.getHost(), executorConfig.getPort(), configuration, executorConfig.getJarFiles());
         }
         init(classLoader);
     }

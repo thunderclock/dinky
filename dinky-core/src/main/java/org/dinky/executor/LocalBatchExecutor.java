@@ -51,12 +51,17 @@ public class LocalBatchExecutor extends Executor {
         }
         if (!executorConfig.isPlan()) {
             Configuration configuration = Configuration.fromMap(executorConfig.getConfig());
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
             if (!configuration.contains(RestOptions.PORT)) {
                 configuration.set(RestOptions.PORT, executorConfig.getPort());
             }
             this.environment = StreamExecutionEnvironment.createLocalEnvironment(configuration);
         } else {
-            this.environment = StreamExecutionEnvironment.createLocalEnvironment();
+            Configuration configuration = new Configuration();
+            // Set classloader leak check config before creating environment
+            Executor.setClassloaderLeakCheckConfig(configuration);
+            this.environment = StreamExecutionEnvironment.createLocalEnvironment(configuration);
         }
         init(classLoader);
     }

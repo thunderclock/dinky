@@ -156,13 +156,34 @@ public abstract class Executor {
         isMockTest = mockTest;
     }
 
+    /**
+     * Set classloader leak check configuration to avoid false positives when third-party libraries
+     * (e.g., Apache HTTP Client, AWS SDK) access classloader in static initialization or after classloader is closed.
+     * This should be called before creating StreamExecutionEnvironment and TableEnvironment.
+     */
+    protected static void setClassloaderLeakCheckConfig(Configuration configuration) {
+        // Disable classloader leak check to avoid false positives when third-party libraries
+        // (e.g., Apache HTTP Client, AWS SDK) access classloader in static initialization
+        configuration.setString("classloader.check-leaked-classloader", "false");
+    }
+
+    /**
+     * Set classloader leak check configuration on StreamExecutionEnvironment's configuration.
+     */
+    protected void setClassloaderLeakCheckConfig() {
+        if (environment != null) {
+            Configuration envConfig = (Configuration) environment.getConfiguration();
+            setClassloaderLeakCheckConfig(envConfig);
+        }
+    }
+
     private void initClassloader(DinkyClassLoader classLoader) {
         if (classLoader != null) {
             try {
                 StreamExecutionEnvironment env = this.environment;
                 // Fix the Classloader in the env above  to appClassLoader, causing ckp to fail to compile
                 ReflectUtil.setFieldValue(env, "userClassloader", classLoader);
-                env.configure(env.getConfiguration(), classLoader);
+                env.configure((Configuration) env.getConfiguration(), classLoader);
             } catch (Throwable e) {
                 log.warn(
                         "The version of flink does not have a Classloader field and the classloader cannot be set.", e);
@@ -175,6 +196,10 @@ public abstract class Executor {
         initFileSystem();
         this.dinkyClassLoader = classLoader;
         Thread.currentThread().setContextClassLoader(classLoader);
+        
+        // Set classloader leak check config on StreamExecutionEnvironment
+        setClassloaderLeakCheckConfig();
+        
         if (executorConfig.isValidParallelism()) {
             environment.setParallelism(executorConfig.getParallelism());
         }
@@ -183,6 +208,9 @@ public abstract class Executor {
         CustomTableEnvironmentContext.set(tableEnvironment);
 
         Configuration configuration = tableEnvironment.getConfig().getConfiguration();
+        // Disable classloader leak check to avoid false positives when third-party libraries
+        // (e.g., Apache HTTP Client, AWS SDK) access classloader in static initialization
+        setClassloaderLeakCheckConfig(configuration);
         if (executorConfig.isValidJobName()) {
             configuration.setString(PipelineOptions.NAME.key(), executorConfig.getJobName());
             setConfig.put(PipelineOptions.NAME.key(), executorConfig.getJobName());

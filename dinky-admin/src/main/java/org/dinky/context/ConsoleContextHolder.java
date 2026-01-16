@@ -131,28 +131,36 @@ public class ConsoleContextHolder {
      * @throws BusException Throws an exception if the process does not exist
      */
     public void appendLog(String processName, String stepPid, String logLine, boolean recordGlobal) {
-        if (!logProcess.containsKey(processName)) {
+        ProcessEntity process = logProcess.get(processName);
+        if (process == null) {
             log.debug("Process {} does not exist, This log was abandoned", processName);
             return;
         }
-        ProcessEntity process = logProcess.get(processName);
         if (recordGlobal) {
             process.appendLog(logLine);
         }
         if (stepPid != null) {
-            ProcessStepEntity stepNode = getStepNode(stepPid, getStepsMap(processName));
-            if (stepNode != null) {
-                stepNode.appendLog(logLine);
-                process.setLastUpdateStep(stepNode);
+            CopyOnWriteArrayList<ProcessStepEntity> stepsMap = getStepsMap(processName);
+            if (stepsMap != null) {
+                ProcessStepEntity stepNode = getStepNode(stepPid, stepsMap);
+                if (stepNode != null) {
+                    stepNode.appendLog(logLine);
+                    process.setLastUpdateStep(stepNode);
+                } else {
+                    log.error("process step not found {},{}", processName, stepPid);
+                }
             } else {
-                log.error("process step not found {},{}", processName, stepPid);
+                log.debug("Process {} steps map is null, skip step log", processName);
             }
-            process.setLastUpdateStep(stepNode);
         }
         // send ws event
-        Map<String, Object> data =
-                MapUtil.<String, Object>builder(processName, process).build();
-        SpringUtil.getBean(ProcessConsole.class).sendData(data);
+        try {
+            Map<String, Object> data =
+                    MapUtil.<String, Object>builder(processName, process).build();
+            SpringUtil.getBean(ProcessConsole.class).sendData(data);
+        } catch (Exception e) {
+            log.debug("Failed to send process data via WebSocket for process {}: {}", processName, e.getMessage());
+        }
     }
 
     /**
@@ -229,6 +237,10 @@ public class ConsoleContextHolder {
      */
     public synchronized void finishedProcess(String processName, ProcessStatus status, Throwable e) {
         ProcessEntity process = logProcess.get(processName);
+        if (process == null) {
+            log.warn("Process {} not found when trying to finish, may have been removed already", processName);
+            return;
+        }
         try {
             process.setStatus(status);
             process.setEndTime(LocalDateTime.now());
@@ -248,8 +260,11 @@ public class ConsoleContextHolder {
                     StrFormatter.format("Process {} exit with status:{}", processName, status),
                     true);
         } catch (Exception ex) {
-            appendLog(processName, null, LogUtil.getError(ex.getCause()), true);
-            log.error("finishedProcess error", ex);
+            // Only try to append log if process still exists
+            if (logProcess.containsKey(processName)) {
+                appendLog(processName, null, LogUtil.getError(ex.getCause()), true);
+            }
+            log.error("finishedProcess error for process {}", processName, ex);
         } finally {
             logProcess.remove(processName);
         }
@@ -313,6 +328,11 @@ public class ConsoleContextHolder {
     }
 
     private CopyOnWriteArrayList<ProcessStepEntity> getStepsMap(String processName) {
-        return logProcess.get(processName).getChildren();
+        ProcessEntity process = logProcess.get(processName);
+        if (process == null) {
+            log.debug("Process {} not found in logProcess map", processName);
+            return null;
+        }
+        return process.getChildren();
     }
 }
